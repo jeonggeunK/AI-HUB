@@ -25,6 +25,8 @@ let state = null;
 let settingsSection = 'general';
 let historyIndex = -1; // -1 = 지금 쓰는 글, 0 = 가장 최근 질문
 let draft = '';
+let recordingShortcut = null; // 단축키 설정에서 키 입력을 기다리는 동작 id
+let shortcutMsg = null; // { text, kind } — 단축키를 바꾼 결과 안내
 let composerEdits = 0; // 입력창·첨부를 사용자가 바꾼 횟수 — 전송 실패 시 되돌려 놓아도 되는지 판단
 const statusTimers = new Map(); // 표시 영역별 자동 지우기 타이머
 
@@ -609,6 +611,77 @@ function button(text, onclick, className = 'btn', disabled = false) {
   return el('button', { className, textContent: text, onclick, disabled });
 }
 
+// ───────── 단축키 표시·변경 ─────────
+
+// 조합은 main/shortcuts.js와 같은 형식 — "Ctrl+Shift+KeyB" (KeyboardEvent.code 기준)
+const CODE_LABEL = {
+  Backslash: '\\', Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", Backquote: '`',
+  BracketLeft: '[', BracketRight: ']', Minus: '-', Equal: '=',
+  ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓',
+  NumpadAdd: 'Num +', NumpadSubtract: 'Num -', NumpadMultiply: 'Num *', NumpadDivide: 'Num /', NumpadDecimal: 'Num .',
+  PageUp: 'PgUp', PageDown: 'PgDn', Delete: 'Del', Insert: 'Ins',
+};
+
+function keyLabel(combo) {
+  return combo.split('+').map((p) => CODE_LABEL[p] || p.replace(/^(Key|Digit)/, '').replace(/^Numpad(\d)$/, 'Num $1')).join('+');
+}
+
+/** 지금 적용 중인 단축키 표시 문자열 ('' = 사용 안 함) */
+function shortcutLabel(id) {
+  const a = state.shortcutActions.find((x) => x.id === id);
+  if (!a) return '';
+  const o = state.settings.shortcuts;
+  const combo = id in o ? o[id] : a.key;
+  return combo ? keyLabel(combo) : '';
+}
+
+/** "동시 질문{key}" → "동시 질문 (Ctrl+Shift+B)" — 단축키가 없으면 괄호째 뺀다 */
+function withKey(text, id) {
+  const k = shortcutLabel(id);
+  return text.replace('{key}', k ? ` (${k})` : '');
+}
+
+function renderShortcutTitles() {
+  for (const node of document.querySelectorAll('[data-sc]')) node.title = withKey(node.dataset.tip, node.dataset.sc);
+}
+
+async function applyShortcut(id, combo) {
+  const r = await window.hub.setShortcut(id, combo);
+  if (r && r.error) shortcutMsg = { text: r.error, kind: 'error' };
+  else if (r && r.taken) shortcutMsg = { text: `'${r.taken}'에서 쓰던 조합이라 그쪽은 '사용 안 함'으로 바꿨습니다.`, kind: 'warn' };
+  else shortcutMsg = null;
+  renderSettings();
+}
+
+/** 버튼에 포커스를 두고 다음 키 조합을 받는다. 앱 단축키는 설정 화면이 떠 있는 동안 꺼져 있어 원래 동작이 실행되지 않는다 */
+function startRecording(id, btn) {
+  recordingShortcut = id;
+  btn.classList.add('recording');
+  btn.replaceChildren('키를 누르세요…');
+  const stop = () => {
+    btn.removeEventListener('keydown', onKey);
+    btn.removeEventListener('blur', cancel);
+    recordingShortcut = null;
+  };
+  const cancel = () => { stop(); renderSettings(); };
+  const onKey = (e) => {
+    e.preventDefault();
+    e.stopPropagation(); // Esc가 설정 창까지 닫지 않게
+    if (!e.code || /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/.test(e.code)) return; // 수식키만 누른 상태 — 나머지 키를 기다린다
+    const mods = [];
+    if (e.ctrlKey || e.metaKey) mods.push('Ctrl');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    const plain = mods.length === 0;
+    if (plain && e.code === 'Escape') return cancel();
+    stop();
+    applyShortcut(id, plain && (e.code === 'Backspace' || e.code === 'Delete') ? '' : [...mods, e.code].join('+'));
+  };
+  btn.addEventListener('keydown', onKey);
+  btn.addEventListener('blur', cancel);
+  btn.focus();
+}
+
 const SECTIONS = {
   general: () => [
     el('h3', { textContent: '일반' }),
@@ -715,24 +788,36 @@ const SECTIONS = {
   ],
 
   shortcuts: () => {
-    const keys = [
-      ['서비스 전환', 'Ctrl+1 ~ 9 / Ctrl+Tab'],
-      ['선택한 탭 새 대화 (탭의 ＋)', 'Ctrl+N'],
-      ['전체 탭 새 대화', 'Ctrl+Shift+N'],
-      ['동시 질문 열기/닫기', 'Ctrl+Shift+B'],
-      ['분할 화면', 'Ctrl+\\'],
-      ['뒤로 / 앞으로', 'Alt+← / Alt+→'],
-      ['새로고침 (캐시 무시)', 'Ctrl+R (Ctrl+Shift+R)'],
-      ['확대 / 축소 / 원래대로', 'Ctrl+= / Ctrl+- / Ctrl+0'],
-      ['설정', 'Ctrl+,'],
-      ['전역: AI Hub 불러오기', (state.hotkeys.find((h) => h.value === state.settings.globalHotkey) || {}).label || '사용 안 함'],
+    const overrides = state.settings.shortcuts;
+    const rows = state.shortcutActions.map((a) => {
+      const changed = a.id in overrides;
+      const current = shortcutLabel(a.id);
+      const rec = el('button', {
+        className: `btn sc-key${current ? '' : ' none'}`,
+        title: '누른 뒤 새 키 조합을 입력하세요',
+        onclick: () => startRecording(a.id, rec),
+      }, [current ? el('kbd', { textContent: current }) : '사용 안 함']);
+      rec.setAttribute('aria-label', `${a.label} 단축키 바꾸기 (지금: ${current || '사용 안 함'})`);
+      const reset = button('기본값', () => applyShortcut(a.id, null), 'btn', !changed);
+      reset.title = `기본값: ${keyLabel(a.key)}`;
+      return row(a.label, changed ? `기본값 ${keyLabel(a.key)}` : null, el('div', { className: 'sc-ctl' }, [rec, reset]));
+    });
+    const fixed = [
+      ['서비스 전환', 'Ctrl+1 ~ 9'],
+      ['새로고침', 'F5'],
+      ['확대 / 축소 / 원래대로', 'Ctrl++ / Num + / Num - / Num 0'],
+      ['전역: AI Hub 불러오기 (일반 설정에서 변경)', (state.hotkeys.find((h) => h.value === state.settings.globalHotkey) || {}).label || '사용 안 함'],
     ];
     return [
       el('h3', { textContent: '단축키' }),
-      el('p', { className: 'lead', textContent: '웹페이지에 포커스가 있어도 동작합니다.' }),
-      el('table', { className: 'keys' }, [el('tbody', {}, keys.map(([a, b]) =>
-        el('tr', {}, [el('td', { textContent: a }), el('td', {}, [el('kbd', { textContent: b })])])))]),
-    ];
+      el('p', { className: 'lead', textContent: '바꿀 단축키를 누른 뒤 원하는 키 조합을 누르세요. Esc는 취소, Backspace는 사용 안 함. 웹페이지에 포커스가 있어도 동작합니다.' }),
+      shortcutMsg ? el('p', { className: `sc-msg ${shortcutMsg.kind}`, textContent: shortcutMsg.text, role: 'status' }) : null,
+      ...rows,
+      row('모두 기본값으로', null, button('초기화', () => applyShortcut('*', null), 'btn', Object.keys(overrides).length === 0)),
+      el('h4', { textContent: '바꿀 수 없는 단축키' }),
+      el('table', { className: 'keys' }, [el('tbody', {}, fixed.map(([x, y]) =>
+        el('tr', {}, [el('td', { textContent: x }), el('td', {}, [el('kbd', { textContent: y })])])))]),
+    ].filter(Boolean);
   },
 
   about: () => {
@@ -765,7 +850,7 @@ const SECTIONS = {
 };
 
 function renderSettings() {
-  if (modal.hidden) return;
+  if (modal.hidden || recordingShortcut) return; // 단축키 입력을 기다리는 중에는 버튼이 사라지지 않게
   // 계정 이름을 입력하는 중에는 다시 그리지 않는다(포커스와 입력 중인 글자가 사라지므로)
   if (settingsBody.contains(document.activeElement) && document.activeElement.classList.contains('text')) return;
   const scroller = settingsBody.parentElement;
@@ -836,6 +921,7 @@ function renderLoginGuide() {
 }
 
 function openSettings(section) {
+  shortcutMsg = null;
   settingsSection = SECTIONS[section] ? section : 'general';
   showModal(settingsDialog);
   renderSettings();
@@ -884,6 +970,7 @@ function welcomeContent() {
     ];
   }
 
+  const tipTitle = (title, id) => (shortcutLabel(id) ? `${title} — ${shortcutLabel(id)}` : title);
   const tip = (n, title, text) => el('li', {}, [el('span', { className: 'num', textContent: String(n) }), el('div', {}, [el('b', { textContent: title }), el('p', { textContent: text })])]);
 
   if (welcomeStep === 1) {
@@ -902,11 +989,11 @@ function welcomeContent() {
   return [
     steps,
     el('h2', { id: 'welcome-title', textContent: '이렇게 써 보세요' }),
-    el('p', { className: 'lead', textContent: '자주 쓰는 기능 다섯 가지입니다. 언제든 ? 버튼(F1)으로 다시 볼 수 있어요.' }),
+    el('p', { className: 'lead', textContent: withKey('자주 쓰는 기능 다섯 가지입니다. 언제든 ? 버튼{key}으로 다시 볼 수 있어요.', 'help') }),
     el('ol', { className: 'tips' }, [
-      tip(1, '동시 질문 — Ctrl+Shift+B', '아래 입력창에 쓰고 Enter를 누르면 고른 AI 모두에게 같은 질문이 갑니다. Shift+Enter는 줄바꿈.'),
-      tip(2, '분할 화면 — Ctrl+\\', '여러 AI의 답을 나란히 비교합니다.'),
-      tip(3, '질문 기록 — Ctrl+H', '보낸 질문과 그때의 대화들이 왼쪽에 쌓입니다. 누르면 그 대화들을 다시 엽니다.'),
+      tip(1, tipTitle('동시 질문', 'broadcast'), '아래 입력창에 쓰고 Enter를 누르면 고른 AI 모두에게 같은 질문이 갑니다. Shift+Enter는 줄바꿈.'),
+      tip(2, tipTitle('분할 화면', 'split'), '여러 AI의 답을 나란히 비교합니다.'),
+      tip(3, tipTitle('질문 기록', 'sidebar'), '보낸 질문과 그때의 대화들이 왼쪽에 쌓입니다. 누르면 그 대화들을 다시 엽니다.'),
       tip(4, '탭 순서 바꾸기', '상단 탭을 끌어다 놓으면 순서가 바뀌고, Ctrl+1·2·3도 그 순서를 따릅니다.'),
       tip(5, '어디서든 불러오기', `다른 프로그램을 쓰다가 ${(state.hotkeys.find((h) => h.value === state.settings.globalHotkey) || {}).label || '전역 단축키(설정에서 지정)'}를 누르면 바로 질문할 수 있습니다.`),
     ]),
@@ -1078,6 +1165,7 @@ function render() {
   renderLoginGuide();
   renderBroadcast();
   renderSettings();
+  renderShortcutTitles();
 }
 
 window.hub.onFocusBroadcast(() => {

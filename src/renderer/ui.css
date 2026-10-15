@@ -481,3 +481,12 @@ body.resizing, body.resizing * { cursor: ns-resize !important; user-select: none
 .toggle.update { margin-right: 6px; border-color: var(--ok); color: var(--ok); }
 .toggle.update.ready { background: var(--ok); color: #0d1f16; font-weight: 600; }
 .toggle.update[hidden] { display: none; }
+/* 단축키 설정 */
+.sc-ctl { display: flex; align-items: center; gap: 6px; }
+.sc-key { min-width: 130px; text-align: center; }
+.sc-key.none { color: var(--muted); }
+.sc-key.recording { border-color: var(--accent); color: var(--accent); }
+.sc-msg { margin: 0 0 8px; font-size: 12px; }
+.sc-msg.warn { color: var(--warn); }
+.sc-msg.error { color: var(--error); }
+.settings-main h4 { margin: 20px 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; }

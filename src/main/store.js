@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 const { SERVICES } = require('./services');
+const shortcuts = require('./shortcuts');
 
 const FILE = () => path.join(app.getPath('userData'), 'config.json');
 const SERVICE_IDS = SERVICES.map((s) => s.id);
@@ -33,6 +34,7 @@ function defaultSettings() {
     alwaysOnTop: false,
     autoUpdate: true, // 새 버전 자동 확인·다운로드
     loginInBrowser: true, // 로그인 화면은 앱 대신 Chrome/Edge에서 (Google 패스키·보안 확인이 앱 안에서 막히므로)
+    shortcuts: {}, // 기본값에서 바꾼 앱 단축키만 { actionId: 조합 | '' } — shortcuts.js 참고
   };
 }
 
@@ -43,6 +45,7 @@ function validateSetting(key, value) {
   if (typeof d[key] === 'boolean') return typeof value === 'boolean' ? value : undefined;
   if (key === 'startupLayout') return STARTUP_LAYOUTS.includes(value) ? value : undefined;
   if (key === 'globalHotkey') return HOTKEYS.some((h) => h.value === value) ? value : undefined;
+  if (key === 'shortcuts') return shortcuts.normalizeOverrides(value);
   if (key === 'enabledServices') {
     if (!Array.isArray(value)) return undefined;
     const ids = SERVICE_IDS.filter((id) => value.includes(id));

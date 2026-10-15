@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('hub', {
   setTargets: (ids) => ipcRenderer.send('hub:set-targets', ids),
   openSettings: (section) => ipcRenderer.send('hub:open-settings', section),
   updateSettings: (patch) => ipcRenderer.send('hub:update-settings', patch),
+  setShortcut: (id, combo) => ipcRenderer.invoke('hub:set-shortcut', id, combo),
   clearHistory: () => ipcRenderer.send('hub:clear-history'),
   renameAccount: (id, label) => ipcRenderer.send('hub:rename-account', id, label),
   accountAction: (action, id) => ipcRenderer.send('hub:account-action', action, id),

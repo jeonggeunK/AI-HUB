@@ -30,36 +30,36 @@
   </svg>
 
   <header id="topbar">
-    <button id="sidebar-toggle" class="icon" title="질문 기록 (Ctrl+H)" aria-label="질문 기록"><svg><use href="#i-history"/></svg></button>
+    <button id="sidebar-toggle" class="icon" data-sc="sidebar" data-tip="질문 기록{key}" title="질문 기록" aria-label="질문 기록"><svg><use href="#i-history"/></svg></button>
     <nav id="tabs" role="tablist" aria-label="AI 서비스"></nav>
 
     <div id="status" role="status" aria-live="polite"></div>
 
     <div class="tools">
       <button id="update-btn" class="toggle update" hidden></button>
-      <button id="new-all" class="toggle" title="모든 탭을 새 대화로 (Ctrl+Shift+N) · 한 탭만은 탭의 ＋"><svg><use href="#i-plus"/></svg><span>전체 새 대화</span></button>
+      <button id="new-all" class="toggle" data-sc="newChatAll" data-tip="모든 탭을 새 대화로{key} · 한 탭만은 탭의 ＋" title="모든 탭을 새 대화로"><svg><use href="#i-plus"/></svg><span>전체 새 대화</span></button>
       <span class="sep"></span>
-      <button class="icon" data-nav="back" title="뒤로 (Alt+←)" aria-label="뒤로"><svg><use href="#i-back"/></svg></button>
-      <button class="icon" data-nav="forward" title="앞으로 (Alt+→)" aria-label="앞으로"><svg><use href="#i-fwd"/></svg></button>
-      <button class="icon" data-nav="reload" title="새로고침 (Ctrl+R)" aria-label="새로고침"><svg><use href="#i-reload"/></svg></button>
-      <button id="zoom" class="chip" title="클릭하면 100%로 (Ctrl +/−/0)">100%</button>
+      <button class="icon" data-nav="back" data-sc="back" data-tip="뒤로{key}" title="뒤로" aria-label="뒤로"><svg><use href="#i-back"/></svg></button>
+      <button class="icon" data-nav="forward" data-sc="forward" data-tip="앞으로{key}" title="앞으로" aria-label="앞으로"><svg><use href="#i-fwd"/></svg></button>
+      <button class="icon" data-nav="reload" data-sc="reload" data-tip="새로고침{key}" title="새로고침" aria-label="새로고침"><svg><use href="#i-reload"/></svg></button>
+      <button id="zoom" class="chip" data-sc="zoomReset" data-tip="클릭하면 100%로{key}" title="클릭하면 100%로">100%</button>
       <span class="sep"></span>
       <div class="split-group">
-        <button id="split" class="toggle" title="분할 화면 (Ctrl+\)"><svg><use href="#i-split"/></svg><span>분할</span></button>
+        <button id="split" class="toggle" data-sc="split" data-tip="분할 화면{key}" title="분할 화면"><svg><use href="#i-split"/></svg><span>분할</span></button>
         <button id="split-menu" class="toggle caret" title="분할할 서비스 선택" aria-label="분할할 서비스 선택"><svg><use href="#i-caret"/></svg></button>
       </div>
-      <button id="broadcast-toggle" class="toggle" title="동시 질문 (Ctrl+Shift+B)"><svg><use href="#i-chat"/></svg><span>동시 질문</span></button>
+      <button id="broadcast-toggle" class="toggle" data-sc="broadcast" data-tip="동시 질문{key}" title="동시 질문"><svg><use href="#i-chat"/></svg><span>동시 질문</span></button>
       <span class="sep"></span>
       <button id="pin" class="icon" title="항상 위에 고정" aria-label="항상 위에 고정"><svg><use href="#i-pin"/></svg></button>
-      <button id="help-btn" class="icon" title="사용 안내 (F1)" aria-label="사용 안내"><svg><use href="#i-help"/></svg></button>
-      <button id="settings-btn" class="icon" title="설정 (Ctrl+,)" aria-label="설정"><svg><use href="#i-gear"/></svg></button>
+      <button id="help-btn" class="icon" data-sc="help" data-tip="사용 안내{key}" title="사용 안내" aria-label="사용 안내"><svg><use href="#i-help"/></svg></button>
+      <button id="settings-btn" class="icon" data-sc="settings" data-tip="설정{key}" title="설정" aria-label="설정"><svg><use href="#i-gear"/></svg></button>
     </div>
   </header>
 
   <aside id="sidebar" hidden aria-label="질문 기록">
     <div class="side-head">
       <span class="side-title">질문 기록</span>
-      <button id="side-close" class="icon small" title="닫기 (Ctrl+H)" aria-label="질문 기록 닫기"><svg><use href="#i-close"/></svg></button>
+      <button id="side-close" class="icon small" data-sc="sidebar" data-tip="닫기{key}" title="닫기" aria-label="질문 기록 닫기"><svg><use href="#i-close"/></svg></button>
     </div>
     <label class="side-search">
       <svg><use href="#i-search"/></svg>
@@ -77,7 +77,7 @@
         <input type="checkbox" id="bc-newchat"> 새 대화로
       </label>
       <span id="bc-result" role="status" aria-live="polite"></span>
-      <button id="bc-new-all" class="btn small-btn" title="모든 탭을 새 대화로 (Ctrl+Shift+N)"><svg><use href="#i-plus"/></svg> 전체 새 대화</button>
+      <button id="bc-new-all" class="btn small-btn" data-sc="newChatAll" data-tip="모든 탭을 새 대화로{key}" title="모든 탭을 새 대화로"><svg><use href="#i-plus"/></svg> 전체 새 대화</button>
       <button id="bc-close" class="icon small" title="닫기 (Esc)" aria-label="동시 질문 닫기"><svg><use href="#i-close"/></svg></button>
     </div>
     <div id="bc-files" class="bc-files" hidden aria-label="첨부 파일"></div>

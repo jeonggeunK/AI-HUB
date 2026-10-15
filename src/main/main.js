@@ -245,6 +245,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('hub:set-targets', guard((ids) => hub.setBroadcastTargets(strs(ids))));
     ipcMain.on('hub:open-settings', guard((section) => hub.openSettings(str(section))));
     ipcMain.on('hub:update-settings', guard((patch) => hub.updateSettings(patch)));
+    ipcMain.handle('hub:set-shortcut', guard((id, combo) => hub.setShortcut(str(id), combo === null ? null : str(combo))));
     ipcMain.on('hub:clear-history', guard(() => hub.clearHistory()));
     ipcMain.on('hub:rename-account', guard((id, label) => hub.renameAccount(str(id), str(label))));
     ipcMain.on('hub:account-action', guard((action, id) => hub.accountAction(str(action), str(id))));

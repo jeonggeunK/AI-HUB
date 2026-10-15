@@ -9,6 +9,7 @@ const { setupSession, attachGuards, closeAllPopups } = require('./security');
 const { broadcast } = require('./broadcast');
 const { validateFiles } = require('./attach');
 const store = require('./store');
+const shortcuts = require('./shortcuts');
 const updater = require('./updater');
 
 const TOP_BAR = 48;
@@ -977,36 +978,85 @@ class Hub {
 
   handleShortcut(event, input) {
     // 설정 화면이 떠 있을 때는 앱 단축키를 끈다 — 뒤의 입력창으로 포커스가 새는 것을 막고 Esc가 모달에 닿게
+    // (단축키 설정 화면에서 키를 눌러 지정할 때도 이 덕분에 원래 동작이 실행되지 않는다)
     if (input.type !== 'keyDown' || this.overlay) return;
-    const ctrl = input.control || input.meta;
-    const key = input.key;
-    const lower = key.toLowerCase();
+    const combo = shortcuts.comboFromInput(input);
+    if (!combo) return;
+    const action = shortcuts.bindings(this.settings.shortcuts).get(combo);
     let handled = true;
 
-    if (ctrl && !input.shift && !input.alt && /^[1-9]$/.test(key)) {
-      const id = this.enabledIds()[Number(key) - 1];
+    if (action) this.runShortcut(action);
+    // 바꿀 수 없는 고정 단축키 — 사용자가 같은 조합을 지정했으면 위에서 그쪽이 먼저 실행된다
+    else if (/^Ctrl\+Digit[1-9]$/.test(combo)) {
+      const id = this.enabledIds()[Number(combo.slice(-1)) - 1];
       if (id) this.selectService(id);
       else handled = false;
-    } else if (ctrl && key === 'Tab') this.cycleService(input.shift ? -1 : 1);
-    else if ((ctrl && !input.shift && lower === 'r') || key === 'F5') this.nav('reload');
-    else if (ctrl && input.shift && lower === 'r') this.nav('hard-reload');
-    else if (ctrl && !input.shift && lower === 'n') this.nav('home');
-    else if (ctrl && input.shift && lower === 'n') this.newChatAll();
-    else if (input.alt && key === 'ArrowLeft') this.nav('back');
-    else if (input.alt && key === 'ArrowRight') this.nav('forward');
-    else if (ctrl && key === '\\') this.toggleLayout();
-    else if (ctrl && input.shift && lower === 'b') this.toggleBroadcast();
-    else if (ctrl && key === ',') this.openSettings('general');
-    else if (ctrl && !input.shift && lower === 'h') this.toggleSidebar();
-    else if (key === 'F1') this.openWelcome();
-    else if (ctrl && (key === '=' || key === '+')) this.zoom(1);
-    else if (ctrl && key === '-') this.zoom(-1);
-    else if (ctrl && key === '0') this.zoom(0);
-    else if (this.dev && key === 'F12') this.activeWebContents()?.toggleDevTools();
-    else if (this.dev && key === 'F11') this.ui.webContents.toggleDevTools();
+    } else if (combo === 'F5') this.nav('reload');
+    else if (combo === 'Ctrl+Shift+Equal' || combo === 'Ctrl+NumpadAdd') this.zoom(1); // Ctrl++
+    else if (combo === 'Ctrl+NumpadSubtract') this.zoom(-1);
+    else if (combo === 'Ctrl+Numpad0') this.zoom(0);
+    else if (this.dev && combo === 'F12') this.activeWebContents()?.toggleDevTools();
+    else if (this.dev && combo === 'F11') this.ui.webContents.toggleDevTools();
     else handled = false;
 
     if (handled) event.preventDefault();
+  }
+
+  runShortcut(action) {
+    switch (action) {
+      case 'broadcast': return this.toggleBroadcast();
+      case 'split': return this.toggleLayout();
+      case 'settings': return this.openSettings('general');
+      case 'sidebar': return this.toggleSidebar();
+      case 'newChat': return this.nav('home');
+      case 'newChatAll': return this.newChatAll();
+      case 'nextTab': return this.cycleService(1);
+      case 'prevTab': return this.cycleService(-1);
+      case 'back': return this.nav('back');
+      case 'forward': return this.nav('forward');
+      case 'reload': return this.nav('reload');
+      case 'hardReload': return this.nav('hard-reload');
+      case 'zoomIn': return this.zoom(1);
+      case 'zoomOut': return this.zoom(-1);
+      case 'zoomReset': return this.zoom(0);
+      case 'help': return this.openWelcome();
+    }
+  }
+
+  /**
+   * 설정 화면에서 단축키 하나를 바꾼다. combo: 새 조합, '' = 사용 안 함, null = 기본값으로.
+   * actionId가 '*'이고 combo가 null이면 전부 기본값으로.
+   * 다른 동작이 쓰던 조합이면 그쪽을 '사용 안 함'으로 돌리고 알려 준다.
+   */
+  setShortcut(actionId, combo) {
+    if (this.sending) return { error: '질문을 보내는 중에는 바꿀 수 없습니다.' };
+    if (actionId === '*' && combo === null) {
+      this.updateSettings({ shortcuts: {} });
+      return { ok: true };
+    }
+    const action = shortcuts.byId[actionId];
+    if (!action) return { error: '알 수 없는 동작입니다.' };
+    const next = { ...this.settings.shortcuts };
+    if (combo === null || combo === action.key) delete next[actionId];
+    else if (combo === '') next[actionId] = '';
+    else {
+      const problem = shortcuts.problem(combo);
+      if (problem) return { error: problem };
+    }
+
+    if (combo && combo !== action.key) next[actionId] = combo;
+
+    // 새로 쓰게 된 조합(기본값으로 되돌린 경우 포함)을 다른 동작이 쓰고 있었으면 그쪽은 '사용 안 함'으로
+    const wanted = combo === null ? action.key : combo;
+    let taken = null;
+    if (wanted) {
+      for (const a of shortcuts.ACTIONS) {
+        const current = a.id in next ? next[a.id] : a.key;
+        if (a.id !== actionId && current === wanted) { next[a.id] = ''; taken = a.label; }
+      }
+    }
+    this.updateSettings({ shortcuts: next });
+    return { ok: true, taken };
   }
 
   // ───────────── UI 상태 ─────────────
@@ -1038,6 +1088,7 @@ class Hub {
       sending: this.sending,
       settings: st.settings,
       hotkeys: store.HOTKEYS,
+      shortcutActions: shortcuts.ACTIONS,
       history: st.history,
       alwaysOnTop: !this.win.isDestroyed() && this.win.isAlwaysOnTop(),
       appVersion: app.getVersion(),
