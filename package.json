@@ -1,0 +1,46 @@
+{
+  "name": "ai-hub",
+  "productName": "AI Hub",
+  "version": "0.1.1",
+  "description": "Claude, ChatGPT, Gemini를 한 창에서 탭/분할 화면으로 사용하는 데스크톱 앱",
+  "main": "src/main/main.js",
+  "private": true,
+  "author": "jeonggeunK",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win nsis",
+    "release": "node scripts/release.js",
+    "postinstall": "node node_modules/electron/install.js"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "local.aihub.app",
+    "productName": "AI Hub",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "jeonggeunK",
+      "repo": "AI-HUB",
+      "releaseType": "release"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
