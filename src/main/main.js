@@ -202,6 +202,24 @@ if (!app.requestSingleInstanceLock()) {
       if (!quitting && hub && hub.settings.closeToTray) {
         e.preventDefault();
         win.hide();
+        return;
+      }
+      // 코딩 도구가 작업 중이면 끄기 전에 확인 — 코드를 고치는 도중에 끊기면 파일이 어중간하게 남을 수 있다
+      const running = hub ? hub.terms.runningCount() : 0;
+      if (running > 0) {
+        const choice = dialog.showMessageBoxSync(win, {
+          type: 'warning',
+          buttons: ['종료', '취소'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'AI Hub',
+          message: `실행 중인 코딩 세션 ${running}개가 함께 종료됩니다.`,
+          detail: '작업 중인 내용이 있으면 끝난 뒤에 닫아 주세요.',
+        });
+        if (choice !== 0) {
+          e.preventDefault();
+          quitting = false; // 트레이 "종료"에서 왔어도 취소했으면 원래대로
+        }
       }
     });
     win.on('closed', () => {
@@ -228,6 +246,26 @@ if (!app.requestSingleInstanceLock()) {
     const strs = (v) => (Array.isArray(v) ? v.map(str) : []);
 
     ipcMain.handle('hub:get-state', guard(() => hub.snapshot()));
+    ipcMain.on('hub:select-terminal', guard((id) => hub.selectTerminal(str(id))));
+    ipcMain.on('hub:service-mode', guard((id, mode) => hub.setServiceMode(str(id), str(mode))));
+
+    // 코딩 도구 화면(terminal.html)이 보내는 요청 — 그 뷰가 보낸 것만 받는다
+    const termGuard = (fn) => (event, ...args) => {
+      if (!hub || !hub.termView || event.sender !== hub.termView.webContents) return undefined;
+      return fn(...args);
+    };
+    ipcMain.on('term:ready', termGuard(() => hub.termReadyNow()));
+    ipcMain.handle('term:new-project', termGuard((id, name) => hub.termNewProject(str(id), str(name))));
+    ipcMain.on('term:open-shell', termGuard((cwd) => hub.termOpenShell(str(cwd))));
+    ipcMain.on('term:open-node', termGuard(() => hub.termOpenNodeSite()));
+    ipcMain.handle('term:start', termGuard((id, cwd, cols, rows, mode) => hub.termStart(str(id), str(cwd), num(cols), num(rows), str(mode))));
+    ipcMain.on('term:write', termGuard((id, data) => hub.terms.write(str(id), str(data))));
+    ipcMain.on('term:resize', termGuard((id, cols, rows) => hub.terms.resize(str(id), num(cols), num(rows))));
+    ipcMain.on('term:stop', termGuard((id) => hub.terms.stop(str(id))));
+    ipcMain.handle('term:pick-folder', termGuard((id) => hub.termPickFolder(str(id))));
+    ipcMain.on('term:open-folder', termGuard((cwd) => hub.termOpenFolder(str(cwd))));
+    ipcMain.on('term:forget-recent', termGuard((cwd) => hub.termForgetRecent(str(cwd))));
+    ipcMain.on('term:recheck', termGuard(() => hub.terms.checkInstalled()));
     ipcMain.on('hub:select-service', guard((id) => hub.selectService(str(id))));
     ipcMain.on('hub:account-menu', guard((id, x, y) => hub.showAccountMenu(str(id), num(x), num(y))));
     ipcMain.on('hub:split-menu', guard((x, y) => hub.showSplitMenu(num(x), num(y))));

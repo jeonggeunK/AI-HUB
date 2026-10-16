@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { app, WebContentsView, Menu, Notification, dialog, session } = require('electron');
+const { app, WebContentsView, Menu, Notification, dialog, session, shell } = require('electron');
 const { spawn } = require('child_process');
 const { loginWithBrowser, findBrowser, hasSession } = require('./browserLogin');
 const { SERVICES, byId } = require('./services');
@@ -11,6 +11,7 @@ const { validateFiles } = require('./attach');
 const store = require('./store');
 const shortcuts = require('./shortcuts');
 const updater = require('./updater');
+const terminals = require('./terminals');
 
 const TOP_BAR = 48;
 const BAR_MIN = 80;
@@ -18,6 +19,11 @@ const PANE_MIN = 120; // 입력창을 키워도 웹페이지 영역은 이만큼
 const GAP = 2;
 const SIDEBAR_W = 272;
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+const FONT_STEPS = [10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28];
+const FONT_DEFAULT = 14;
+// 터미널에 포커스가 있을 때는 앱이 가로채지 않고 터미널로 보내는 동작 —
+// Ctrl+R(기록 검색)·Ctrl+H(지우기)·Alt+←→(단어 이동)·Ctrl+N 등은 터미널에서 쓰는 키다
+const TERMINAL_PASSTHROUGH = new Set(['newChat', 'reload', 'hardReload', 'back', 'forward', 'sidebar']);
 
 class Hub {
   /**
@@ -41,10 +47,19 @@ class Hub {
     this.navGen = new WeakMap(); // webContents -> 우리가 이동시킨 횟수 — 대화 주소 기록이 엉뚱한 대화를 잡지 않도록
     this.lastSide = 0;
     this.lastSignInWarn = 0;
+    this.termView = null; // 코딩 도구 탭을 그리는 뷰 (처음 열 때 만든다)
+    this.termAttached = false;
+    this.terms = new terminals.Terminals({
+      onData: (id, data) => this.sendTerm('term:data', { id, data }),
+      onExit: (id, code, kind) => this.sendTerm('term:exit', { id, code, kind }),
+      onChange: () => { this.pushTermState(); this.pushState(); },
+    });
+    this.terms.checkInstalled();
 
     const st = this.state;
     if (st.settings.startupLayout !== 'remember') st.layout = st.settings.startupLayout;
     this.normalizeEnabled();
+    this.termReady = false; // 터미널 화면이 메시지를 받을 준비가 됐는지 (term:ready)
   }
 
   get state() {
@@ -74,6 +89,49 @@ class Hub {
     if (st.splitServices.length === 0) st.splitServices = [...ids];
     st.broadcastTargets = st.broadcastTargets.filter((id) => ids.includes(id));
     if (st.broadcastTargets.length === 0) st.broadcastTargets = [...ids];
+    this.applyMode();
+  }
+
+  /** [채팅 | 코딩] 전환을 보여 줄 코딩 도구 id */
+  enabledTools() {
+    return this.settings.codingTools;
+  }
+
+  /** Ctrl+1~9와 Ctrl+Tab이 도는 탭 */
+  tabIds() {
+    return this.enabledIds();
+  }
+
+  /** 이 서비스 탭의 코딩 도구 (꺼져 있으면 null) */
+  toolFor(serviceId) {
+    const t = terminals.TOOLS.find((x) => x.service === serviceId);
+    return t && this.enabledTools().includes(t.id) ? t : null;
+  }
+
+  /**
+   * 화면에 터미널을 띄울지 정한다 — 탭 하나 보기에서 활성 탭이 코딩 모드면 그 도구.
+   * 분할 화면은 웹페이지끼리 나란히 보는 용도라 채팅으로 보인다(모드는 기억해 두었다가 다시 쓴다).
+   */
+  applyMode() {
+    const st = this.state;
+    const tool = st.layout === 'single' && st.serviceMode[st.activeService] === 'code' ? this.toolFor(st.activeService) : null;
+    st.activeTerminal = tool ? tool.id : null;
+  }
+
+  /** 탭의 [채팅 | 코딩] 전환 */
+  setServiceMode(serviceId, mode) {
+    if (this.busy() || !this.enabledIds().includes(serviceId)) return;
+    if (mode === 'code' && !this.toolFor(serviceId)) return;
+    const st = this.state;
+    st.serviceMode[serviceId] = mode === 'code' ? 'code' : 'chat';
+    st.activeService = serviceId;
+    if (mode === 'code') st.layout = 'single';
+    this.applyMode();
+    store.save();
+    this.layout();
+    this.pushTermState();
+    this.focusActive();
+    this.pushState();
   }
 
   // ───────────── 계정/뷰 ─────────────
@@ -156,6 +214,9 @@ class Hub {
     this.cancelBrowserLogin(); // 열려 있는 로그인용 브라우저도 닫힌다
     for (const id of [...this.views.keys()]) this.destroyView(id);
     closeAllPopups();
+    this.terms.stopAll();
+    if (this.termView && !this.termView.webContents.isDestroyed()) this.termView.webContents.close();
+    this.termView = null;
   }
 
   /** 동시 질문 전송 중에는 레이아웃/계정을 바꾸지 못하게 막는다 */
@@ -178,6 +239,7 @@ class Hub {
 
   visibleServices() {
     const st = this.state;
+    if (st.activeTerminal) return []; // 코딩 도구 탭을 보는 중에는 웹 서비스를 내린다
     if (st.layout === 'split') return this.enabledIds().filter((id) => st.splitServices.includes(id));
     return [st.activeService];
   }
@@ -226,6 +288,18 @@ class Hub {
       view.setBounds({ x, y: top, width: w, height: paneH });
     });
 
+    if (this.state.activeTerminal) {
+      const tv = this.ensureTermView();
+      if (!this.termAttached) {
+        this.win.contentView.addChildView(tv);
+        this.termAttached = true;
+      }
+      tv.setBounds({ x: left, y: top, width: areaW, height: paneH });
+    } else if (this.termAttached) {
+      if (this.termView) this.win.contentView.removeChildView(this.termView);
+      this.termAttached = false;
+    }
+
     if (this.overlay) this.win.contentView.addChildView(this.ui); // 오버레이 중엔 UI가 맨 위
   }
 
@@ -257,6 +331,7 @@ class Hub {
     } else {
       // 서비스 뷰들을 다시 UI 위로 올린다
       for (const id of this.attached) this.win.contentView.addChildView(this.views.get(id).view);
+      if (this.termAttached && this.termView) this.win.contentView.addChildView(this.termView);
       if (this.state.broadcastOpen) this.focusComposer();
       else this.focusActive();
     }
@@ -264,6 +339,13 @@ class Hub {
 
   focusActive() {
     if (this.overlay) return; // 설정 화면이 떠 있으면 키 입력은 UI가 받아야 한다
+    if (this.state.activeTerminal) {
+      if (this.termView && this.termAttached) {
+        this.termView.webContents.focus();
+        this.sendTerm('term:focus', {});
+      }
+      return;
+    }
     const entry = this.views.get(this.activeAccountId(this.state.activeService));
     if (entry && this.attached.has(entry.accountId)) entry.view.webContents.focus();
   }
@@ -274,6 +356,7 @@ class Hub {
   }
 
   activeWebContents() {
+    if (this.state.activeTerminal) return this.termView ? this.termView.webContents : null;
     const entry = this.views.get(this.activeAccountId(this.state.activeService));
     return entry ? entry.view.webContents : null;
   }
@@ -281,26 +364,31 @@ class Hub {
   // ───────────── 동작 ─────────────
 
   selectService(serviceId) {
+    if (terminals.byId[serviceId]) return this.selectTerminal(serviceId);
     if (this.busy()) return;
     if (!this.enabledIds().includes(serviceId)) return;
     const st = this.state;
     st.activeService = serviceId;
+    this.applyMode();
     if (st.layout === 'split' && !st.splitServices.includes(serviceId)) st.splitServices.push(serviceId);
     store.save();
     this.layout();
+    this.pushTermState();
     this.focusActive();
     this.pushState();
   }
 
   cycleService(step) {
-    const ids = this.state.layout === 'split' ? this.visibleServices() : this.enabledIds();
-    const i = ids.indexOf(this.state.activeService);
+    const st = this.state;
+    const ids = st.layout === 'split' && !st.activeTerminal ? this.visibleServices() : this.tabIds();
+    const i = ids.indexOf(st.activeService);
     this.selectService(ids[(i + step + ids.length) % ids.length]);
   }
 
   /** 탭의 ＋ 버튼: 그 서비스(현재 계정)만 새 대화로. 화면에 안 보이는 탭이면 그 탭으로 전환한다 */
   newChat(serviceId) {
     if (this.busy() || !this.enabledIds().includes(serviceId)) return;
+    if (this.state.activeTerminal && this.state.activeService === serviceId) return; // 코딩 모드 — 세션은 터미널 화면에서 관리
     if (!this.visibleServices().includes(serviceId)) this.selectService(serviceId);
     const { view } = this.ensureView(this.activeAccountId(serviceId));
     this.bumpNav(view.webContents); // 진행 중인 대화 주소 기록이 새 대화를 잡지 않도록
@@ -313,9 +401,11 @@ class Hub {
     if (this.busy()) return;
     const st = this.state;
     st.layout = st.layout === 'split' ? 'single' : 'split';
+    this.applyMode();
     if (st.layout === 'split' && !st.splitServices.includes(st.activeService)) st.splitServices.push(st.activeService);
     store.save();
     this.layout();
+    this.pushTermState();
     this.focusActive();
     this.pushState();
   }
@@ -339,7 +429,7 @@ class Hub {
   }
 
   nav(action) {
-    if (this.busy()) return;
+    if (this.busy() || this.state.activeTerminal) return;
     const wc = this.activeWebContents();
     if (!wc) return;
     const h = wc.navigationHistory;
@@ -352,6 +442,7 @@ class Hub {
 
   zoom(direction) {
     if (this.busy()) return;
+    if (this.state.activeTerminal) return this.zoomTerminal(direction);
     const accountId = this.activeAccountId(this.state.activeService);
     const cur = this.state.zoom[accountId] || 1;
     let next = 1;
@@ -372,6 +463,167 @@ class Hub {
     if (entry && !entry.view.webContents.isDestroyed()) {
       entry.view.webContents.setZoomFactor(this.state.zoom[accountId] || 1);
     }
+  }
+
+  // ───────────── 코딩 도구 (터미널) ─────────────
+
+  ensureTermView() {
+    if (this.termView && !this.termView.webContents.isDestroyed()) return this.termView;
+    const tv = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'terminal.js'),
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+        spellcheck: false,
+      },
+    });
+    tv.setBackgroundColor('#1b1c1f');
+    const wc = tv.webContents;
+    wc.on('before-input-event', (e, input) => this.handleShortcut(e, input, true));
+    wc.on('will-navigate', (e) => e.preventDefault());
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.on('did-start-loading', () => { this.termReady = false; });
+    wc.on('did-finish-load', () => this.focusActive()); // 상태와 지난 출력은 화면이 term:ready를 보내면 넘긴다
+    wc.on('render-process-gone', () => setTimeout(() => !wc.isDestroyed() && wc.reload(), 500)); // 다시 그리면 출력은 버퍼에서 되살린다
+    wc.loadFile(path.join(__dirname, '..', 'renderer', 'terminal.html'));
+    this.termView = tv;
+    this.termAttached = false;
+    this.termReady = false;
+    return tv;
+  }
+
+  sendTerm(channel, payload) {
+    const wc = this.termView && this.termView.webContents;
+    if (wc && !wc.isDestroyed() && this.termReady) wc.send(channel, payload);
+  }
+
+  /** 터미널 화면에 보낼 상태. withBuffers면 화면을 처음 그릴 때 되살릴 출력도 함께 */
+  termSnapshot(withBuffers = false) {
+    const st = this.state;
+    return {
+      active: st.activeTerminal,
+      fontSize: st.terminal.fontSize,
+      recent: st.terminal.recent,
+      home: terminals.homeDir,
+      hasNpm: this.terms.hasNpm,
+      tools: this.enabledTools().map((id) => {
+        const t = terminals.byId[id];
+        return {
+          id, name: t.name, color: t.color, pkg: t.pkg, command: t.command, login: t.login, service: byId[t.service].name,
+          installed: this.terms.installed[id],
+          cwd: st.terminal.cwd[id] || null,
+          session: this.terms.info(id, withBuffers),
+        };
+      }),
+    };
+  }
+
+  pushTermState(withBuffers = false) {
+    if (this.termView) this.sendTerm('term:state', this.termSnapshot(withBuffers));
+  }
+
+  /** 코딩 도구 id로 열기 = 그 서비스 탭을 코딩 모드로 */
+  selectTerminal(toolId) {
+    const t = terminals.byId[toolId];
+    if (t) this.setServiceMode(t.service, 'code');
+  }
+
+  termReadyNow() {
+    this.termReady = true;
+    this.pushTermState(true);
+  }
+
+  /** 문서\AI Hub 프로젝트\<이름> 폴더를 만든다 — 이미 있으면 (2), (3)… */
+  termNewProject(toolId, name) {
+    const clean = String(name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/[. ]+$/, '').trim().slice(0, 60) || '새 프로젝트';
+    const base = path.join(app.getPath('documents'), 'AI Hub 프로젝트');
+    let dir = path.join(base, clean);
+    for (let n = 2; fs.existsSync(dir); n++) dir = path.join(base, `${clean} (${n})`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      return { error: `폴더를 만들지 못했습니다: ${err.message}` };
+    }
+    if (terminals.byId[toolId]) {
+      this.state.terminal.cwd[toolId] = dir;
+      store.save();
+      this.pushTermState();
+    }
+    return { path: dir };
+  }
+
+  /** 그 폴더에서 PowerShell 창을 따로 연다 — 직접 명령을 실행하거나 결과물을 확인할 때 */
+  termOpenShell(cwd) {
+    if (!terminals.isDir(cwd)) return;
+    try {
+      // detached면 Windows에서 자기 콘솔 창을 갖는다
+      const child = spawn('powershell.exe', ['-NoExit'], { cwd, detached: true, stdio: 'ignore' });
+      child.on('error', () => this.toast('PowerShell을 열지 못했습니다.', 'error'));
+      child.unref();
+    } catch {
+      this.toast('PowerShell을 열지 못했습니다.', 'error');
+    }
+  }
+
+  termOpenNodeSite() {
+    shell.openExternal('https://nodejs.org/ko/download');
+  }
+
+  /** 터미널 화면에서 온 요청 */
+  termStart(toolId, cwd, cols, rows, mode) {
+    if (!this.enabledTools().includes(toolId)) return { error: '꺼져 있는 도구입니다.' };
+    const r = this.terms.start(toolId, cwd, cols, rows, mode === 'install' ? 'install' : 'run');
+    if (r.ok) this.rememberFolder(toolId, cwd);
+    return r;
+  }
+
+  rememberFolder(toolId, cwd) {
+    const t = this.state.terminal;
+    t.cwd[toolId] = cwd;
+    t.recent = [cwd, ...t.recent.filter((p) => p.toLowerCase() !== cwd.toLowerCase())].slice(0, store.RECENT_MAX);
+    store.save();
+  }
+
+  async termPickFolder(toolId) {
+    const current = this.state.terminal.cwd[toolId];
+    const r = await dialog.showOpenDialog(this.win, {
+      title: '작업 폴더 선택',
+      defaultPath: terminals.isDir(current) ? current : terminals.homeDir,
+      properties: ['openDirectory'],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    // 고르기만 해도 다음에 그 폴더가 기본으로 보이게
+    this.state.terminal.cwd[toolId] = r.filePaths[0];
+    store.save();
+    this.pushTermState();
+    return r.filePaths[0];
+  }
+
+  termForgetRecent(cwd) {
+    const t = this.state.terminal;
+    t.recent = t.recent.filter((p) => p !== cwd);
+    store.save();
+    this.pushTermState();
+  }
+
+  termOpenFolder(cwd) {
+    if (terminals.isDir(cwd)) shell.openPath(cwd);
+  }
+
+  zoomTerminal(direction) {
+    const t = this.state.terminal;
+    let next = FONT_DEFAULT;
+    if (direction !== 0) {
+      const idx = FONT_STEPS.findIndex((f) => f >= t.fontSize);
+      const base = idx === -1 ? FONT_STEPS.length - 1 : idx;
+      next = FONT_STEPS[Math.min(FONT_STEPS.length - 1, Math.max(0, base + direction))];
+    }
+    t.fontSize = next;
+    store.save();
+    this.pushTermState();
+    this.pushState();
   }
 
   openNativeApp(serviceId) {
@@ -415,6 +667,12 @@ class Hub {
       this.layout();
     }
     if (changed.includes('saveHistory') && !this.settings.saveHistory) this.state.history = [];
+    if (changed.includes('codingTools')) {
+      for (const t of terminals.TOOLS) if (!this.enabledTools().includes(t.id)) this.terms.stop(t.id);
+      this.normalizeEnabled(); // 꺼진 도구의 탭을 코딩 모드로 보고 있었으면 채팅으로
+      this.layout();
+      this.pushTermState();
+    }
     store.save();
     this.onSettingsChanged(changed);
     this.pushState();
@@ -907,6 +1165,10 @@ class Hub {
     const historyEntry = this.addHistory(prompt, files.map((p) => path.basename(p)));
 
     // 입력 이벤트가 전달되려면 대상 뷰가 화면에 붙어 있어야 한다. 이미 다 보이면 레이아웃은 그대로 둔다.
+    if (st.activeTerminal) { // 입력하려면 대상 페이지가 화면에 있어야 한다 — 보던 탭은 채팅으로
+      st.serviceMode[st.activeService] = 'chat';
+      st.activeTerminal = null;
+    }
     const visible = this.visibleServices();
     if (!ids.every((id) => visible.includes(id))) {
       st.layout = ids.length > 1 ? 'split' : 'single';
@@ -976,7 +1238,7 @@ class Hub {
 
   // ───────────── 단축키 ─────────────
 
-  handleShortcut(event, input) {
+  handleShortcut(event, input, fromTerminal = false) {
     // 설정 화면이 떠 있을 때는 앱 단축키를 끈다 — 뒤의 입력창으로 포커스가 새는 것을 막고 Esc가 모달에 닿게
     // (단축키 설정 화면에서 키를 눌러 지정할 때도 이 덕분에 원래 동작이 실행되지 않는다)
     if (input.type !== 'keyDown' || this.overlay) return;
@@ -985,13 +1247,14 @@ class Hub {
     const action = shortcuts.bindings(this.settings.shortcuts).get(combo);
     let handled = true;
 
+    if (action && fromTerminal && TERMINAL_PASSTHROUGH.has(action)) return; // 터미널 프로그램이 쓰는 키
     if (action) this.runShortcut(action);
     // 바꿀 수 없는 고정 단축키 — 사용자가 같은 조합을 지정했으면 위에서 그쪽이 먼저 실행된다
     else if (/^Ctrl\+Digit[1-9]$/.test(combo)) {
-      const id = this.enabledIds()[Number(combo.slice(-1)) - 1];
+      const id = this.tabIds()[Number(combo.slice(-1)) - 1];
       if (id) this.selectService(id);
       else handled = false;
-    } else if (combo === 'F5') this.nav('reload');
+    } else if (combo === 'F5' && !fromTerminal) this.nav('reload');
     else if (combo === 'Ctrl+Shift+Equal' || combo === 'Ctrl+NumpadAdd') this.zoom(1); // Ctrl++
     else if (combo === 'Ctrl+NumpadSubtract') this.zoom(-1);
     else if (combo === 'Ctrl+Numpad0') this.zoom(0);
@@ -1084,7 +1347,16 @@ class Hub {
       broadcastTargets: st.broadcastTargets,
       accounts: st.accounts,
       activeAccount: st.activeAccount,
-      zoom: st.zoom[this.activeAccountId(st.activeService)] || 1,
+      zoom: st.activeTerminal ? st.terminal.fontSize / FONT_DEFAULT : st.zoom[this.activeAccountId(st.activeService)] || 1,
+      activeTerminal: st.activeTerminal,
+      // 서비스 탭마다 코딩 도구 정보 — 탭의 [채팅 | 코딩] 전환과 "코딩 실행 중" 표시에 쓴다
+      coding: Object.fromEntries(this.enabledIds().map((sid) => {
+        const t = this.toolFor(sid);
+        if (!t) return [sid, null];
+        const info = this.terms.info(t.id);
+        return [sid, { id: t.id, name: t.name, running: !!(info && info.running), cwd: st.terminal.cwd[t.id] || null }];
+      })),
+      allTools: terminals.TOOLS.map((t) => ({ id: t.id, name: t.name, service: byId[t.service].name, pkg: t.pkg, installed: this.terms.installed[t.id] })),
       sending: this.sending,
       settings: st.settings,
       hotkeys: store.HOTKEYS,

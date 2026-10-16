@@ -50,28 +50,58 @@ const activeAccount = (sid) => state.accounts[sid].find((a) => a.id === state.ac
 // ───────── 상단 바 ─────────
 
 function renderTabs() {
-  const visible = state.layout === 'split' ? state.splitServices : [state.activeService];
+  const visible = state.activeTerminal ? [state.activeService] : state.layout === 'split' ? state.splitServices : [state.activeService];
   tabsEl.replaceChildren(...state.services.map((svc, i) => {
     const account = activeAccount(svc.id);
     const multi = state.accounts[svc.id].length > 1;
     const needLogin = state.loginStatus[account.id] === false;
-    const accountText = needLogin ? (multi ? `${account.label} · 로그인 필요` : '로그인 필요') : (multi ? account.label : '');
+    const active = svc.id === state.activeService;
+    const coding = state.coding[svc.id]; // 이 탭의 코딩 도구 (꺼져 있으면 null)
+    const codeMode = active && !!state.activeTerminal;
+    const folder = coding && coding.cwd ? coding.cwd.split(/[\\/]/).filter(Boolean).pop() : '';
+
+    // 둘째 줄: 코딩 모드면 폴더, 다른 탭을 보는 동안 코딩이 돌고 있으면 그 사실, 아니면 계정·로그인 상태
+    let subText = needLogin ? (multi ? `${account.label} · 로그인 필요` : '로그인 필요') : (multi ? account.label : '');
+    let subClass = needLogin ? ' need-login' : '';
+    if (codeMode) { subText = `코딩${folder ? ` · ${folder}` : ''}`; subClass = coding.running ? ' running' : ''; }
+    else if (coding && coding.running) { subText = '코딩 실행 중'; subClass = ' running'; }
 
     const main = el('button', {
       className: 'tab-main',
-      title: `${svc.name} — ${account.label} (Ctrl+${i + 1})`,
+      title: `${svc.name}${codeMode ? ` — ${coding.name}` : ` — ${account.label}`} (Ctrl+${i + 1})`,
       disabled: state.sending,
       onclick: () => window.hub.selectService(svc.id),
     }, [
       el('span', { className: 'dot' }),
       el('span', { className: 'tab-text' }, [
         el('span', { className: 'tab-name', textContent: svc.name }),
-        el('span', { className: `tab-account${needLogin ? ' need-login' : ''}`, textContent: accountText }),
+        el('span', { className: `tab-account${subClass}`, textContent: subText }),
       ]),
       i < 9 ? el('span', { className: 'tab-key', textContent: String(i + 1) }) : null,
     ]);
     main.setAttribute('role', 'tab');
-    main.setAttribute('aria-selected', String(svc.id === state.activeService));
+    main.setAttribute('aria-selected', String(active));
+
+    // [채팅 | 코딩] — 보고 있는 탭에만. 코딩을 누르면 같은 탭에서 그 회사의 코딩 에이전트가 열린다
+    let toggle = null;
+    if (active && coding) {
+      const seg = (mode, label, tip) => {
+        const b = el('button', {
+          className: 'seg',
+          textContent: label,
+          title: tip,
+          disabled: state.sending,
+          onclick: () => window.hub.setServiceMode(svc.id, mode),
+        });
+        b.setAttribute('aria-pressed', String((mode === 'code') === codeMode));
+        return b;
+      };
+      toggle = el('div', { className: 'mode-toggle', role: 'group' }, [
+        seg('chat', '채팅', `${svc.name} 웹 채팅`),
+        seg('code', '코딩', `${coding.name} — 내 PC의 폴더에서 코드를 만들고 실행합니다`),
+      ]);
+      toggle.setAttribute('aria-label', `${svc.name} 채팅/코딩 전환`);
+    }
 
     const caret = el('button', {
       className: 'caret',
@@ -84,19 +114,20 @@ function renderTabs() {
     }, [icon('i-caret')]);
     caret.setAttribute('aria-label', `${svc.name} 계정 메뉴`);
 
-    const fresh = el('button', {
+    // 코딩 모드에는 "새 대화"가 없다 (세션은 코딩 화면의 버튼으로)
+    const fresh = codeMode ? null : el('button', {
       className: 'tab-new',
       title: `${svc.name} 새 대화`,
       disabled: state.sending,
       onclick: () => window.hub.newChat(svc.id),
     }, [icon('i-plus')]);
-    fresh.setAttribute('aria-label', `${svc.name} 새 대화`);
+    if (fresh) fresh.setAttribute('aria-label', `${svc.name} 새 대화`);
 
-    const tab = el('div', { className: 'tab' }, [main, fresh, caret]);
+    const tab = el('div', { className: 'tab' }, [main, toggle, fresh, caret].filter(Boolean));
     tab.style.setProperty('--svc', svc.color);
-    tab.classList.toggle('active', svc.id === state.activeService);
+    tab.classList.toggle('active', active);
     tab.classList.toggle('visible', visible.includes(svc.id));
-    tab.classList.toggle('loading', state.status[svc.id].loading);
+    tab.classList.toggle('loading', !codeMode && state.status[svc.id].loading);
     if (!state.sending) makeDraggable(tab, svc.id);
     return tab;
   }));
@@ -113,7 +144,7 @@ function dropSide(tab, e) {
 function makeDraggable(tab, id) {
   tab.draggable = true;
   // ＋·▾ 버튼을 누를 때는 드래그가 시작되지 않게 (살짝 움직여도 클릭으로 처리)
-  tab.addEventListener('pointerdown', (e) => { tab.draggable = !e.target.closest('.tab-new, .caret'); });
+  tab.addEventListener('pointerdown', (e) => { tab.draggable = !e.target.closest('.tab-new, .caret, .mode-toggle'); });
   tab.addEventListener('pointerup', () => { tab.draggable = true; });
   tab.title = '드래그해서 순서를 바꿀 수 있습니다';
   tab.addEventListener('dragstart', (e) => {
@@ -149,9 +180,10 @@ function renderTools() {
   const st = state.status[state.activeService];
   // 동시 질문 전송 중에는 레이아웃/계정/이동 조작을 잠근다(메인 프로세스에서도 막지만 눈에 보이게)
   const lock = state.sending;
-  document.querySelector('[data-nav="back"]').disabled = lock || !st.canGoBack;
-  document.querySelector('[data-nav="forward"]').disabled = lock || !st.canGoForward;
-  document.querySelector('[data-nav="reload"]').disabled = lock;
+  const term = !!state.activeTerminal;
+  document.querySelector('[data-nav="back"]').disabled = lock || term || !st.canGoBack;
+  document.querySelector('[data-nav="forward"]').disabled = lock || term || !st.canGoForward;
+  document.querySelector('[data-nav="reload"]').disabled = lock || term;
   $('#new-all').disabled = lock;
   renderUpdateButton();
   $('#bc-new-all').disabled = lock;
@@ -786,6 +818,30 @@ const SECTIONS = {
       ]);
     }),
   ],
+
+  coding: () => {
+    const on = new Set(state.settings.codingTools);
+    return [
+      el('h3', { textContent: '코딩' }),
+      el('p', { className: 'lead', textContent: '서비스 탭의 [채팅 | 코딩] 중 코딩을 누르면, 같은 탭에서 그 회사의 코딩 에이전트가 열립니다. 고른 폴더 안에서 직접 파일을 만들고 고치고, 실행해서 확인합니다. 쓰지 않는 것은 꺼 두면 전환 버튼이 사라집니다.' }),
+      ...state.allTools.map((t) => {
+        const toggle = el('input', {
+          type: 'checkbox',
+          className: 'switch',
+          checked: on.has(t.id),
+          onchange: () => {
+            const next = new Set(state.settings.codingTools);
+            if (toggle.checked) next.add(t.id); else next.delete(t.id);
+            window.hub.updateSettings({ codingTools: state.allTools.map((x) => x.id).filter((id) => next.has(id)) });
+          },
+        });
+        toggle.setAttribute('aria-label', `${t.service} 탭에서 ${t.name} 사용`);
+        const status = t.installed === undefined ? '설치 여부 확인 중…'
+          : t.installed ? '설치됨' : '설치 안 됨 — 코딩을 누르면 설치 버튼이 나옵니다';
+        return row(`${t.service} → ${t.name}`, status, toggle);
+      }),
+    ];
+  },
 
   shortcuts: () => {
     const overrides = state.settings.shortcuts;

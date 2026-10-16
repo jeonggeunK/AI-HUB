@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <!-- xterm이 글자 크기·테마용 <style>을 직접 만들어 넣으므로 style은 inline을 허용 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:">
+  <title>코딩 도구</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="terminal.css">
+</head>
+<body>
+  <header id="bar">
+    <span class="dot"></span>
+    <span id="tool-name"></span>
+    <button id="cwd" class="path" title="탐색기에서 열기"></button>
+    <span id="run-state"></span>
+    <span class="grow"></span>
+    <span id="confirm" hidden></span>
+    <button id="shell" class="btn" title="이 폴더에서 PowerShell 창을 따로 엽니다 — 직접 명령을 실행하거나 결과를 확인할 때">PowerShell</button>
+    <button id="restart" class="btn" title="같은 폴더에서 다시 시작">다시 시작</button>
+    <button id="end" class="btn" title="세션을 끝내고 폴더 선택 화면으로">세션 끝내기</button>
+  </header>
+
+  <main id="main">
+    <section id="start" hidden></section>
+    <div id="terms"></div>
+  </main>
+  <div id="drop-hint" hidden>놓으면 파일 경로를 입력합니다</div>
+
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+  <script src="terminal.js"></script>
+</body>
+</html>

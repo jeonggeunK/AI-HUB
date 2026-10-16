@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('hub', {
   getState: () => ipcRenderer.invoke('hub:get-state'),
   getVersion: () => ipcRenderer.invoke('hub:get-version'),
   selectService: (id) => ipcRenderer.send('hub:select-service', id),
+  selectTerminal: (id) => ipcRenderer.send('hub:select-terminal', id),
+  setServiceMode: (id, mode) => ipcRenderer.send('hub:service-mode', id, mode),
   accountMenu: (id, x, y) => ipcRenderer.send('hub:account-menu', id, x, y),
   splitMenu: (x, y) => ipcRenderer.send('hub:split-menu', x, y),
   nav: (action) => ipcRenderer.send('hub:nav', action),

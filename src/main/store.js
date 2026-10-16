@@ -4,9 +4,12 @@ const path = require('path');
 const { app } = require('electron');
 const { SERVICES } = require('./services');
 const shortcuts = require('./shortcuts');
+const { TOOLS } = require('./terminals');
 
 const FILE = () => path.join(app.getPath('userData'), 'config.json');
 const SERVICE_IDS = SERVICES.map((s) => s.id);
+const TOOL_IDS = TOOLS.map((t) => t.id);
+const RECENT_MAX = 8;
 const HISTORY_MAX = 100;
 const HISTORY_TEXT_MAX = 20000;
 
@@ -34,6 +37,7 @@ function defaultSettings() {
     alwaysOnTop: false,
     autoUpdate: true, // 새 버전 자동 확인·다운로드
     loginInBrowser: true, // 로그인 화면은 앱 대신 Chrome/Edge에서 (Google 패스키·보안 확인이 앱 안에서 막히므로)
+    codingTools: [...TOOL_IDS], // 서비스 탭에 [채팅 | 코딩] 전환을 보여 줄 코딩 도구
     shortcuts: {}, // 기본값에서 바꾼 앱 단축키만 { actionId: 조합 | '' } — shortcuts.js 참고
   };
 }
@@ -46,6 +50,7 @@ function validateSetting(key, value) {
   if (key === 'startupLayout') return STARTUP_LAYOUTS.includes(value) ? value : undefined;
   if (key === 'globalHotkey') return HOTKEYS.some((h) => h.value === value) ? value : undefined;
   if (key === 'shortcuts') return shortcuts.normalizeOverrides(value);
+  if (key === 'codingTools') return Array.isArray(value) ? TOOL_IDS.filter((id) => value.includes(id)) : undefined;
   if (key === 'enabledServices') {
     if (!Array.isArray(value)) return undefined;
     const ids = SERVICE_IDS.filter((id) => value.includes(id));
@@ -88,6 +93,9 @@ function defaults() {
     sidebarOpen: true, // 질문 기록 사이드바는 기본으로 열림
     composerHeight: null, // 동시 질문 바 높이 — null이면 내용에 맞춰 자동, 숫자면 사용자가 드래그로 정한 높이
     onboarded: false, // 처음 실행 안내를 봤는지
+    serviceMode: {}, // serviceId -> 'chat' | 'code' — 그 탭을 마지막에 어느 쪽으로 봤는지
+    activeTerminal: null, // 지금 화면에 보이는 코딩 도구 id (활성 탭이 코딩 모드일 때) — hub.applyMode가 정한다
+    terminal: { cwd: {}, recent: [], fontSize: 14 }, // 도구별 마지막 작업 폴더, 최근 폴더, 글자 크기
     settings: defaultSettings(),
   };
 }
@@ -146,6 +154,17 @@ function normalizeHistoryEntry(h, accountIds) {
   };
 }
 
+const isPath = (v) => typeof v === 'string' && v.length > 0 && v.length < 1000;
+
+function normalizeTerminal(t) {
+  const out = { cwd: {}, recent: [], fontSize: 14 };
+  if (!isObj(t)) return out;
+  if (isObj(t.cwd)) for (const id of TOOL_IDS) if (isPath(t.cwd[id])) out.cwd[id] = t.cwd[id];
+  if (Array.isArray(t.recent)) out.recent = t.recent.filter(isPath).filter((p, i, a) => a.indexOf(p) === i).slice(0, RECENT_MAX);
+  if (isInt(t.fontSize) && t.fontSize >= 8 && t.fontSize <= 32) out.fontSize = t.fontSize;
+  return out;
+}
+
 /** 저장된 JSON을 신뢰하지 않고 필드마다 검증해 정상 상태로 만든다 */
 function normalize(saved) {
   const base = defaults();
@@ -195,6 +214,9 @@ function normalize(saved) {
     sidebarOpen: typeof saved.sidebarOpen === 'boolean' ? saved.sidebarOpen : base.sidebarOpen,
     composerHeight: isInt(saved.composerHeight) && saved.composerHeight >= 80 && saved.composerHeight <= 4000 ? saved.composerHeight : null,
     onboarded: saved.onboarded === true,
+    serviceMode: isObj(saved.serviceMode) ? Object.fromEntries(Object.entries(saved.serviceMode).filter(([k, v]) => SERVICE_IDS.includes(k) && (v === 'chat' || v === 'code'))) : {},
+    activeTerminal: null,
+    terminal: normalizeTerminal(saved.terminal),
     settings: normalizeSettings(saved.settings),
   };
 }
@@ -236,4 +258,4 @@ function flush() {
   }
 }
 
-module.exports = { get, save, flush, validateSetting, HOTKEYS, HISTORY_MAX, HISTORY_TEXT_MAX };
+module.exports = { RECENT_MAX, get, save, flush, validateSetting, HOTKEYS, HISTORY_MAX, HISTORY_TEXT_MAX };
