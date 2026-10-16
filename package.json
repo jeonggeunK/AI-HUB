@@ -1,7 +1,7 @@
 {
   "name": "ai-hub",
   "productName": "AI Hub",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Claude, ChatGPT, Gemini를 한 창에서 탭/분할 화면으로 사용하는 데스크톱 앱",
   "main": "src/main/main.js",
   "private": true,
