@@ -81,9 +81,9 @@ function defaults() {
     bounds: { width: 1400, height: 900 },
     maximized: false,
     activeService: SERVICE_IDS[0],
-    layout: 'single', // 'single' | 'split'
+    layout: 'split', // 'single' | 'split' — 처음엔 여러 AI를 나란히
     splitServices: [...SERVICE_IDS],
-    broadcastOpen: false,
+    broadcastOpen: true, // 처음엔 동시 질문 입력창을 열어 둔다
     accounts,
     activeAccount,
     zoom: {}, // accountId -> zoomFactor
